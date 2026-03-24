@@ -1,14 +1,15 @@
 import React from 'react';
 
 const STATUS_BADGE = {
-  running:   'bg-blue-950 text-blue-400 border-blue-800',
-  completed: 'bg-emerald-950 text-emerald-400 border-emerald-800',
-  done:      'bg-emerald-950 text-emerald-400 border-emerald-800',
-  failed:    'bg-red-950 text-red-400 border-red-800',
-  error:     'bg-red-950 text-red-400 border-red-800',
-  review:    'bg-amber-950 text-amber-400 border-amber-800',
-  rejected:  'bg-red-950 text-red-400 border-red-800',
-  pending:   'bg-slate-800 text-slate-400 border-slate-700',
+  running:          'bg-blue-950 text-blue-400 border-blue-800',
+  completed:        'bg-emerald-950 text-emerald-400 border-emerald-800',
+  done:             'bg-emerald-950 text-emerald-400 border-emerald-800',
+  approved:         'bg-emerald-950 text-emerald-400 border-emerald-800',
+  pending_approval: 'bg-amber-950 text-amber-400 border-amber-700',
+  failed:           'bg-red-950 text-red-400 border-red-800',
+  error:            'bg-red-950 text-red-400 border-red-800',
+  rejected:         'bg-red-950 text-red-400 border-red-800',
+  pending:          'bg-slate-800 text-slate-400 border-slate-700',
 };
 
 const AGENT_COLOR = {

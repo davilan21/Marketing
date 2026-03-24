@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime, timezone
 
-from database import get_db, AgentLog, Campaign, ReviewRequest
+from database import get_db, AgentLog, Campaign, ReviewRequest, ApprovalLog
 from agents.orchestrator import run_campaign
 from review_manager import submit_decision
 from ws_manager import manager
@@ -157,14 +157,14 @@ def get_log_stats(db: Session = Depends(get_db)):
     }
 
 
-# ── Human-review endpoints ─────────────────────────────────────────────────────
+# ── Human-approval endpoints ───────────────────────────────────────────────────
 
 @router.get("/review")
-def get_pending_reviews(db: Session = Depends(get_db)):
-    """Return all review requests that are still pending."""
+def get_pending_approvals(db: Session = Depends(get_db)):
+    """Return all approval requests that are still awaiting a decision."""
     reviews = (
         db.query(ReviewRequest)
-        .filter(ReviewRequest.status == "pending")
+        .filter(ReviewRequest.status == "pending_approval")
         .order_by(desc(ReviewRequest.created_at))
         .all()
     )
@@ -186,13 +186,11 @@ def get_pending_reviews(db: Session = Depends(get_db)):
 def approve_review(review_id: int, db: Session = Depends(get_db)):
     review = db.query(ReviewRequest).filter(ReviewRequest.id == review_id).first()
     if not review:
-        raise HTTPException(status_code=404, detail="Review request not found")
+        raise HTTPException(status_code=404, detail="Approval request not found")
+    if review.status != "pending_approval":
+        raise HTTPException(status_code=409, detail="Approval request already decided")
+    # Unblock the orchestrator thread; it will write the ApprovalLog entry
     submit_decision(review_id, "approved")
-    manager.broadcast_sync({
-        "type": "review_decided",
-        "review_id": review_id,
-        "decision": "approved",
-    })
     return {"review_id": review_id, "decision": "approved"}
 
 
@@ -200,11 +198,33 @@ def approve_review(review_id: int, db: Session = Depends(get_db)):
 def reject_review(review_id: int, db: Session = Depends(get_db)):
     review = db.query(ReviewRequest).filter(ReviewRequest.id == review_id).first()
     if not review:
-        raise HTTPException(status_code=404, detail="Review request not found")
+        raise HTTPException(status_code=404, detail="Approval request not found")
+    if review.status != "pending_approval":
+        raise HTTPException(status_code=409, detail="Approval request already decided")
     submit_decision(review_id, "rejected")
-    manager.broadcast_sync({
-        "type": "review_decided",
-        "review_id": review_id,
-        "decision": "rejected",
-    })
     return {"review_id": review_id, "decision": "rejected"}
+
+
+@router.get("/approval-logs")
+def get_approval_logs(
+    campaign_id: Optional[str] = None,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+):
+    """Immutable audit trail of every approve/reject decision with timestamps."""
+    query = db.query(ApprovalLog).order_by(desc(ApprovalLog.decided_at))
+    if campaign_id:
+        query = query.filter(ApprovalLog.campaign_id == campaign_id)
+    entries = query.limit(limit).all()
+    return [
+        {
+            "id": e.id,
+            "review_request_id": e.review_request_id,
+            "campaign_id": e.campaign_id,
+            "agent_name": e.agent_name,
+            "task": e.task,
+            "decision": e.decision,
+            "decided_at": e.decided_at.isoformat() if e.decided_at else None,
+        }
+        for e in entries
+    ]

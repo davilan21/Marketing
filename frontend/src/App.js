@@ -4,8 +4,9 @@ import AgentCard from './components/AgentCard';
 import LogTable from './components/LogTable';
 import ReviewPanel from './components/ReviewPanel';
 import HistoryPanel from './components/HistoryPanel';
+import ApprovalLogPanel from './components/ApprovalLogPanel';
 import RunCampaignModal from './components/RunCampaignModal';
-import { campaignApi, logsApi, reviewApi } from './services/api';
+import { campaignApi, logsApi, reviewApi, approvalLogApi } from './services/api';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -25,11 +26,12 @@ export default function App() {
   const { events, connected } = useWebSocket();
   const lastEventKeyRef = useRef(null);
 
-  const [agentStatuses, setAgentStatuses] = useState(mkStatuses);
-  const [logs, setLogs]                   = useState([]);
-  const [reviews, setReviews]             = useState([]);
-  const [campaigns, setCampaigns]         = useState([]);
-  const [showModal, setShowModal]         = useState(false);
+  const [agentStatuses, setAgentStatuses]     = useState(mkStatuses);
+  const [logs, setLogs]                       = useState([]);
+  const [reviews, setReviews]                 = useState([]);
+  const [approvalLogs, setApprovalLogs]       = useState([]);
+  const [campaigns, setCampaigns]             = useState([]);
+  const [showModal, setShowModal]             = useState(false);
   const [campaignRunning, setCampaignRunning] = useState(false);
 
   // ── Data fetchers ──────────────────────────────────────────────────────────
@@ -40,8 +42,7 @@ export default function App() {
 
   const fetchPendingReviews = useCallback(async () => {
     try {
-      const data = (await reviewApi.getPending()).data;
-      setReviews(data.map((r) => ({ ...r, agent: r.agent })));
+      setReviews((await reviewApi.getPending()).data);
     } catch { /* ignore */ }
   }, []);
 
@@ -61,22 +62,31 @@ export default function App() {
     } catch { /* ignore */ }
   }, []);
 
+  const fetchApprovalLogs = useCallback(async () => {
+    try {
+      setApprovalLogs((await approvalLogApi.getAll({ limit: 50 })).data);
+    } catch { /* ignore */ }
+  }, []);
+
   useEffect(() => {
     fetchCampaigns();
     fetchPendingReviews();
     fetchHistoricLogs();
-  }, [fetchCampaigns, fetchPendingReviews, fetchHistoricLogs]);
+    fetchApprovalLogs();
+  }, [fetchCampaigns, fetchPendingReviews, fetchHistoricLogs, fetchApprovalLogs]);
 
   // ── WebSocket event processor ──────────────────────────────────────────────
 
   useEffect(() => {
     if (events.length === 0) return;
     const latest = events[0];
-    // De-duplicate
-    const key = `${latest.type}-${latest.timestamp}-${latest.agent ?? ''}`;
+
+    // De-duplicate by a stable key
+    const key = `${latest.type}-${latest.timestamp}-${latest.agent ?? ''}${latest.review_id ?? ''}`;
     if (key === lastEventKeyRef.current) return;
     lastEventKeyRef.current = key;
 
+    // Agent execution state change → update card + add log row
     if (latest.type === 'agent_update') {
       setAgentStatuses((prev) => ({
         ...prev,
@@ -95,7 +105,8 @@ export default function App() {
       ].slice(0, 300));
     }
 
-    if (latest.type === 'review_request') {
+    // Agent finished drafting and is waiting for human approval
+    if (latest.type === 'approval_requested') {
       setReviews((prev) => {
         if (prev.find((r) => r.id === latest.review_id)) return prev;
         return [
@@ -105,15 +116,28 @@ export default function App() {
             agent:       latest.agent,
             task:        latest.task,
             output:      latest.output,
-            timestamp:   latest.timestamp,
+            created_at:  latest.timestamp,
           },
           ...prev,
         ];
       });
     }
 
-    if (latest.type === 'review_decided') {
+    // User approved or rejected — remove from pending panel, add to audit log
+    if (latest.type === 'approval_decided') {
       setReviews((prev) => prev.filter((r) => r.id !== latest.review_id));
+      setApprovalLogs((prev) => [
+        {
+          id:                `ws-${Date.now()}`,
+          review_request_id: latest.review_id,
+          campaign_id:       latest.campaign_id,
+          agent_name:        latest.agent,
+          task:              latest.task,
+          decision:          latest.decision,
+          decided_at:        latest.decided_at,
+        },
+        ...prev,
+      ].slice(0, 100));
     }
 
     if (latest.type === 'campaign_start') {
@@ -124,23 +148,23 @@ export default function App() {
     if (latest.type === 'campaign_complete' || latest.type === 'campaign_error') {
       setCampaignRunning(false);
       fetchCampaigns();
+      fetchApprovalLogs();
     }
-  }, [events, fetchCampaigns]);
+  }, [events, fetchCampaigns, fetchApprovalLogs]);
 
   // ── Handlers ───────────────────────────────────────────────────────────────
 
   const handleReviewDecision = useCallback(async (reviewId, decision) => {
     try {
       await reviewApi.decide(reviewId, decision);
+      // Optimistic removal; the approval_decided WS event will also update state
       setReviews((prev) => prev.filter((r) => r.id !== reviewId));
     } catch (e) {
-      console.error('Review decision failed', e);
+      console.error('Approval decision failed', e);
     }
   }, []);
 
-  const handleLaunched = useCallback(() => {
-    setShowModal(false);
-  }, []);
+  const handleLaunched = useCallback(() => setShowModal(false), []);
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -172,7 +196,14 @@ export default function App() {
             </span>
           )}
 
-          {/* Run Campaign */}
+          {/* Pending-approval alert */}
+          {reviews.length > 0 && (
+            <span className="flex items-center gap-1.5 bg-amber-950 border border-amber-700 text-amber-300 text-xs font-medium px-3 py-1 rounded-full">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+              {reviews.length} awaiting approval
+            </span>
+          )}
+
           <button
             onClick={() => setShowModal(true)}
             disabled={campaignRunning}
@@ -201,14 +232,15 @@ export default function App() {
         {/* ── Main content ── */}
         <div className="grid grid-cols-1 xl:grid-cols-5 gap-6 flex-1 min-h-0">
 
-          {/* Log table — takes 3/5 */}
+          {/* Log table — 3/5 width */}
           <div className="xl:col-span-3 min-h-[520px] flex flex-col">
             <LogTable logs={logs} />
           </div>
 
-          {/* Right sidebar — reviews + history */}
+          {/* Right sidebar — approvals + audit log + history */}
           <div className="xl:col-span-2 flex flex-col gap-6">
             <ReviewPanel reviews={reviews} onDecision={handleReviewDecision} />
+            <ApprovalLogPanel entries={approvalLogs} onRefresh={fetchApprovalLogs} />
             <HistoryPanel campaigns={campaigns} onRefresh={fetchCampaigns} />
           </div>
         </div>

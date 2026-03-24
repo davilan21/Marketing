@@ -1,13 +1,14 @@
 import React from 'react';
 
 const STATUS = {
-  idle:      { label: 'Idle',      dot: 'bg-slate-500',                  text: 'text-slate-400',  ring: 'border-slate-800' },
-  running:   { label: 'Running',   dot: 'bg-blue-500 animate-pulse',     text: 'text-blue-400',   ring: 'border-blue-800'  },
-  completed: { label: 'Done',      dot: 'bg-emerald-500',                text: 'text-emerald-400',ring: 'border-emerald-900'},
-  review:    { label: 'Review',    dot: 'bg-amber-400 animate-pulse',    text: 'text-amber-400',  ring: 'border-amber-700' },
-  error:     { label: 'Error',     dot: 'bg-red-500',                    text: 'text-red-400',    ring: 'border-red-900'   },
-  failed:    { label: 'Error',     dot: 'bg-red-500',                    text: 'text-red-400',    ring: 'border-red-900'   },
-  rejected:  { label: 'Rejected',  dot: 'bg-red-500',                    text: 'text-red-400',    ring: 'border-red-900'   },
+  idle:             { label: 'Idle',             dot: 'bg-slate-500',               text: 'text-slate-400',   ring: 'border-slate-800'  },
+  running:          { label: 'Running',          dot: 'bg-blue-500 animate-pulse',  text: 'text-blue-400',    ring: 'border-blue-800'   },
+  completed:        { label: 'Done',             dot: 'bg-emerald-500',             text: 'text-emerald-400', ring: 'border-emerald-900' },
+  approved:         { label: 'Approved',         dot: 'bg-emerald-500',             text: 'text-emerald-400', ring: 'border-emerald-900' },
+  pending_approval: { label: 'Awaiting Approval',dot: 'bg-amber-400 animate-pulse', text: 'text-amber-400',   ring: 'border-amber-700'  },
+  error:            { label: 'Error',            dot: 'bg-red-500',                 text: 'text-red-400',     ring: 'border-red-900'    },
+  failed:           { label: 'Error',            dot: 'bg-red-500',                 text: 'text-red-400',     ring: 'border-red-900'    },
+  rejected:         { label: 'Rejected',         dot: 'bg-red-500',                 text: 'text-red-400',     ring: 'border-red-900'    },
 };
 
 export default function AgentCard({ name, icon, status = 'idle', task }) {

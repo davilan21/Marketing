@@ -20,8 +20,12 @@ export const logsApi = {
 };
 
 export const reviewApi = {
-  getPending: ()              => api.get('/api/review'),
-  decide:     (id, decision)  => api.post(`/api/review/${id}/${decision}`),
+  getPending: ()             => api.get('/api/review'),
+  decide:     (id, decision) => api.post(`/api/review/${id}/${decision}`),
+};
+
+export const approvalLogApi = {
+  getAll: (params) => api.get('/api/approval-logs', { params }),
 };
 
 export default api;

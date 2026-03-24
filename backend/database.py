@@ -50,9 +50,22 @@ class ReviewRequest(Base):
     agent_name = Column(String(100), nullable=False)
     task = Column(String(255), nullable=False)
     output = Column(Text, nullable=True)
-    status = Column(String(50), default="pending")  # pending | approved | rejected
+    status = Column(String(50), default="pending_approval")  # pending_approval | approved | rejected
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     decided_at = Column(DateTime, nullable=True)
+
+
+class ApprovalLog(Base):
+    """Immutable audit trail of every approve/reject decision."""
+    __tablename__ = "approval_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    review_request_id = Column(Integer, nullable=False)
+    campaign_id = Column(String(100), nullable=False)
+    agent_name = Column(String(100), nullable=False)
+    task = Column(String(255), nullable=False)
+    decision = Column(String(20), nullable=False)   # "approved" | "rejected"
+    decided_at = Column(DateTime, nullable=False)
 
 
 def init_db():
