@@ -1,3 +1,4 @@
+import json
 import os
 import uuid
 from datetime import datetime, timezone
@@ -8,7 +9,10 @@ from .analytics_agent import create_analytics_agent, create_analytics_task
 from .content_agent import create_content_agent, create_content_task
 from .email_agent import create_email_agent, create_email_task
 from .social_media_agent import create_social_media_agent, create_social_media_task
-from database import AgentLog, Campaign, ReviewRequest, ApprovalLog, SessionLocal
+from database import AgentLog, Campaign, PlatformCredentials, ReviewRequest, ApprovalLog, SessionLocal
+from integrations.instagram import post_to_instagram
+from integrations.linkedin import post_to_linkedin
+from integrations.tiktok import post_to_tiktok
 from review_manager import create_review_event, wait_for_review
 
 
@@ -118,6 +122,75 @@ def _request_approval(
     })
 
     return decision
+
+
+# ── Social platform publisher ──────────────────────────────────────────────────
+
+def _publish_to_platforms(
+    db: Session,
+    social_output: str,
+    broadcast,
+    campaign_id: str,
+) -> dict:
+    """
+    Parse the JSON output from the Social Media Agent and post to each
+    enabled platform that has credentials configured.
+    Returns a dict mapping platform → posting result.
+    """
+
+    # Parse agent output (JSON with keys: instagram, linkedin, tiktok, strategy)
+    try:
+        # Strip markdown fences if the model wrapped its output anyway
+        clean = social_output.strip()
+        if clean.startswith("```"):
+            clean = "\n".join(clean.split("\n")[1:])
+        if clean.endswith("```"):
+            clean = "\n".join(clean.split("\n")[:-1])
+        platform_content = json.loads(clean)
+    except json.JSONDecodeError:
+        # Fall back: treat entire output as the content for all platforms
+        platform_content = {
+            "instagram": social_output,
+            "linkedin":  social_output,
+            "tiktok":    social_output,
+        }
+
+    posting_fns = {
+        "instagram": post_to_instagram,
+        "linkedin":  post_to_linkedin,
+        "tiktok":    post_to_tiktok,
+    }
+
+    results = {}
+    rows = {r.platform: r for r in db.query(PlatformCredentials).all()}
+
+    for platform, fn in posting_fns.items():
+        row = rows.get(platform)
+        if not row or not row.enabled:
+            results[platform] = {"skipped": True, "reason": "not configured or disabled"}
+            continue
+
+        try:
+            creds = json.loads(row.creds_json or "{}")
+        except Exception:
+            results[platform] = {"success": False, "error": "malformed credentials JSON"}
+            continue
+
+        content = platform_content.get(platform, social_output)
+        result  = fn(content, creds)
+        results[platform] = result
+
+        _emit(broadcast, {
+            "type":       "platform_post",
+            "platform":   platform,
+            "campaign_id": campaign_id,
+            "success":    result.get("success", False),
+            "draft":      result.get("draft", False),
+            "error":      result.get("error", ""),
+            "post_id":    result.get("post_id") or result.get("publish_id", ""),
+        })
+
+    return results
 
 
 # ── Campaign runner ────────────────────────────────────────────────────────────
@@ -311,6 +384,21 @@ def run_campaign(campaign_input: dict, broadcast=None) -> dict:
                 "status": social_decision, "task": "Social Media Strategy",
                 "output": social_output[:400], "campaign_id": campaign_id,
             })
+
+            # If approved, publish to configured platforms
+            if social_decision == "approved":
+                _emit(broadcast, {
+                    "type": "agent_update", "agent": "Social Media Agent",
+                    "status": "posting", "task": "Publishing to Platforms",
+                    "campaign_id": campaign_id,
+                })
+                posting_results = _publish_to_platforms(db, social_output, broadcast, campaign_id)
+                results["platform_posts"] = posting_results
+                _emit(broadcast, {
+                    "type": "posting_complete",
+                    "campaign_id": campaign_id,
+                    "results": posting_results,
+                })
 
         except Exception as exc:
             social_output = f"Social media strategy failed: {exc}"

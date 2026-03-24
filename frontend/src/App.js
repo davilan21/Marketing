@@ -6,6 +6,7 @@ import ReviewPanel from './components/ReviewPanel';
 import HistoryPanel from './components/HistoryPanel';
 import ApprovalLogPanel from './components/ApprovalLogPanel';
 import RunCampaignModal from './components/RunCampaignModal';
+import SettingsModal from './components/SettingsModal';
 import { campaignApi, logsApi, reviewApi, approvalLogApi } from './services/api';
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -32,6 +33,7 @@ export default function App() {
   const [approvalLogs, setApprovalLogs]       = useState([]);
   const [campaigns, setCampaigns]             = useState([]);
   const [showModal, setShowModal]             = useState(false);
+  const [showSettings, setShowSettings]       = useState(false);
   const [campaignRunning, setCampaignRunning] = useState(false);
 
   // ── Data fetchers ──────────────────────────────────────────────────────────
@@ -140,6 +142,24 @@ export default function App() {
       ].slice(0, 100));
     }
 
+    // Platform posting result from orchestrator
+    if (latest.type === 'platform_post') {
+      const icon = latest.success ? '✓' : (latest.draft ? '📋' : '✗');
+      setLogs((prev) => [
+        {
+          id:        `ws-${Date.now()}-${Math.random()}`,
+          timestamp: latest.timestamp,
+          agent:     'Social Media Agent',
+          task:      `Post to ${latest.platform}`,
+          status:    latest.success ? 'completed' : (latest.draft ? 'draft' : 'error'),
+          output:    latest.success
+            ? `${icon} Posted — ${latest.post_id || ''}`
+            : `${icon} ${latest.error || 'Skipped'}`,
+        },
+        ...prev,
+      ].slice(0, 300));
+    }
+
     if (latest.type === 'campaign_start') {
       setCampaignRunning(true);
       setAgentStatuses(mkStatuses());
@@ -205,6 +225,13 @@ export default function App() {
           )}
 
           <button
+            onClick={() => setShowSettings(true)}
+            className="bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-medium px-3 py-2 rounded-lg transition-colors"
+            title="Platform Settings"
+          >
+            ⚙️
+          </button>
+          <button
             onClick={() => setShowModal(true)}
             disabled={campaignRunning}
             className="bg-violet-600 hover:bg-violet-500 disabled:bg-slate-700 disabled:text-slate-500 disabled:cursor-not-allowed text-white text-sm font-semibold px-4 py-2 rounded-lg transition-colors"
@@ -249,6 +276,10 @@ export default function App() {
       {/* ── Modal ── */}
       {showModal && (
         <RunCampaignModal onClose={() => setShowModal(false)} onLaunched={handleLaunched} />
+      )}
+
+      {showSettings && (
+        <SettingsModal onClose={() => setShowSettings(false)} />
       )}
     </div>
   );

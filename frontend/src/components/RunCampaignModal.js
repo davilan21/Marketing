@@ -112,9 +112,10 @@ export default function RunCampaignModal({ onClose, onLaunched }) {
             </div>
           )}
 
-          {/* Note about review gate */}
+          {/* Note about approval gates + posting */}
           <p className="text-xs text-slate-600 bg-slate-800/50 rounded-lg px-3 py-2">
-            ⚠️ The Email Agent will pause for human review before the Social Media Agent runs.
+            ⚠️ Both the Email Agent and Social Media Agent pause for approval before publishing.
+            Configure Instagram, LinkedIn &amp; TikTok credentials via ⚙️ Settings.
           </p>
 
           <div className="flex gap-3 pt-1">

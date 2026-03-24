@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from database import init_db
 from routers.campaigns import router as campaigns_router
+from routers.settings import router as settings_router
 from ws_manager import manager
 
 app = FastAPI(
@@ -28,6 +29,7 @@ app.add_middleware(
 )
 
 app.include_router(campaigns_router)
+app.include_router(settings_router)
 
 
 @app.on_event("startup")

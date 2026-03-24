@@ -28,4 +28,12 @@ export const approvalLogApi = {
   getAll: (params) => api.get('/api/approval-logs', { params }),
 };
 
+export const settingsApi = {
+  list:   ()                       => api.get('/api/settings/credentials'),
+  get:    (platform)               => api.get(`/api/settings/credentials/${platform}`),
+  save:   (platform, payload)      => api.put(`/api/settings/credentials/${platform}`, payload),
+  remove: (platform)               => api.delete(`/api/settings/credentials/${platform}`),
+  test:   (platform)               => api.post(`/api/settings/credentials/${platform}/test`),
+};
+
 export default api;

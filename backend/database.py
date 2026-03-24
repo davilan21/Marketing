@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Boolean
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime, timezone
@@ -66,6 +66,17 @@ class ApprovalLog(Base):
     task = Column(String(255), nullable=False)
     decision = Column(String(20), nullable=False)   # "approved" | "rejected"
     decided_at = Column(DateTime, nullable=False)
+
+
+class PlatformCredentials(Base):
+    """Stores API credentials for each social media platform."""
+    __tablename__ = "platform_credentials"
+
+    id         = Column(Integer, primary_key=True, index=True)
+    platform   = Column(String(50), unique=True, nullable=False)  # instagram | linkedin | tiktok
+    creds_json = Column(Text, nullable=False, default="{}")       # JSON blob of credential fields
+    enabled    = Column(Boolean, default=True)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 def init_db():
