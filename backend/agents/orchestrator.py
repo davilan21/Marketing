@@ -52,7 +52,7 @@ def run_campaign(campaign_input: dict) -> dict:
 
         api_key = os.getenv("ANTHROPIC_API_KEY")
         llm = LLM(
-            model="claude-sonnet-4-5",
+            model="claude-sonnet-4-20250514",
             api_key=api_key,
         )
 
