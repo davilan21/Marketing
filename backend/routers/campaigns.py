@@ -1,17 +1,16 @@
 from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import desc
+from sqlalchemy import desc, func
 from pydantic import BaseModel
 from typing import Optional
-import threading
+from datetime import datetime, timezone
 
-from database import get_db, AgentLog, Campaign
+from database import get_db, AgentLog, Campaign, ReviewRequest
 from agents.orchestrator import run_campaign
+from review_manager import submit_decision
+from ws_manager import manager
 
 router = APIRouter(prefix="/api", tags=["campaigns"])
-
-# Track background campaign runs
-_campaign_futures: dict = {}
 
 
 class CampaignRequest(BaseModel):
@@ -21,18 +20,14 @@ class CampaignRequest(BaseModel):
     goals: str
 
 
-class CampaignResponse(BaseModel):
-    campaign_id: str
-    status: str
-    message: str
+# ── Campaign endpoints ─────────────────────────────────────────────────────────
 
-
-@router.post("/campaigns", response_model=CampaignResponse)
-def create_campaign(request: CampaignRequest, background_tasks: BackgroundTasks):
-    """Launch a new marketing campaign with all 4 agents."""
-    import uuid
-    campaign_id = str(uuid.uuid4())
-
+@router.post("/run")
+def run_campaign_endpoint(request: CampaignRequest, background_tasks: BackgroundTasks):
+    """
+    Start a campaign asynchronously. Live progress is streamed over WebSocket /ws.
+    All 4 agents run in sequence; the Email Agent pauses for human review.
+    """
     campaign_input = {
         "name": request.name,
         "description": request.description,
@@ -40,41 +35,36 @@ def create_campaign(request: CampaignRequest, background_tasks: BackgroundTasks)
         "goals": request.goals,
     }
 
-    def run_in_background():
-        try:
-            run_campaign(campaign_input)
-        except Exception as e:
-            print(f"Campaign {campaign_id} failed: {e}")
+    def _run():
+        run_campaign(campaign_input, broadcast=manager.broadcast_sync)
 
-    background_tasks.add_task(run_in_background)
-
-    return CampaignResponse(
-        campaign_id=campaign_id,
-        status="started",
-        message="Campaign launched. Agents are working in sequence.",
-    )
+    background_tasks.add_task(_run)
+    return {"status": "started", "message": "Campaign launched. Subscribe to /ws for live updates."}
 
 
-@router.post("/campaigns/run", response_model=dict)
+@router.post("/campaigns/run")
 def run_campaign_sync(request: CampaignRequest):
-    """Run campaign synchronously and return full results."""
+    """Run campaign synchronously (no WebSocket needed) and return all results."""
     campaign_input = {
         "name": request.name,
         "description": request.description,
         "target_audience": request.target_audience,
         "goals": request.goals,
     }
-    result = run_campaign(campaign_input)
-    return result
+    return run_campaign(campaign_input, broadcast=manager.broadcast_sync)
+
+
+@router.post("/campaigns")
+def create_campaign(request: CampaignRequest, background_tasks: BackgroundTasks):
+    """Alias of /run – kept for backwards compatibility."""
+    return run_campaign_endpoint(request, background_tasks)
 
 
 @router.get("/campaigns")
 def list_campaigns(db: Session = Depends(get_db)):
-    """List all campaigns."""
     campaigns = db.query(Campaign).order_by(desc(Campaign.created_at)).all()
     return [
         {
-            "id": c.id,
             "campaign_id": c.campaign_id,
             "name": c.name,
             "description": c.description,
@@ -90,7 +80,6 @@ def list_campaigns(db: Session = Depends(get_db)):
 
 @router.get("/campaigns/{campaign_id}")
 def get_campaign(campaign_id: str, db: Session = Depends(get_db)):
-    """Get campaign details and all agent logs for it."""
     campaign = db.query(Campaign).filter(Campaign.campaign_id == campaign_id).first()
     if not campaign:
         raise HTTPException(status_code=404, detail="Campaign not found")
@@ -101,15 +90,10 @@ def get_campaign(campaign_id: str, db: Session = Depends(get_db)):
         .order_by(AgentLog.timestamp)
         .all()
     )
-
     return {
         "campaign": {
-            "id": campaign.id,
             "campaign_id": campaign.campaign_id,
             "name": campaign.name,
-            "description": campaign.description,
-            "target_audience": campaign.target_audience,
-            "goals": campaign.goals,
             "status": campaign.status,
             "created_at": campaign.created_at.isoformat() if campaign.created_at else None,
             "completed_at": campaign.completed_at.isoformat() if campaign.completed_at else None,
@@ -129,6 +113,8 @@ def get_campaign(campaign_id: str, db: Session = Depends(get_db)):
     }
 
 
+# ── Log endpoints ──────────────────────────────────────────────────────────────
+
 @router.get("/logs")
 def get_all_logs(
     limit: int = 100,
@@ -136,7 +122,6 @@ def get_all_logs(
     status: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
-    """Retrieve agent action logs with optional filters."""
     query = db.query(AgentLog).order_by(desc(AgentLog.timestamp))
     if agent_name:
         query = query.filter(AgentLog.agent_name == agent_name)
@@ -160,25 +145,66 @@ def get_all_logs(
 
 @router.get("/logs/stats")
 def get_log_stats(db: Session = Depends(get_db)):
-    """Get summary statistics for agent logs."""
-    from sqlalchemy import func
-
     total = db.query(func.count(AgentLog.id)).scalar()
-    by_agent = (
-        db.query(AgentLog.agent_name, func.count(AgentLog.id))
-        .group_by(AgentLog.agent_name)
-        .all()
-    )
-    by_status = (
-        db.query(AgentLog.status, func.count(AgentLog.id))
-        .group_by(AgentLog.status)
-        .all()
-    )
+    by_agent = db.query(AgentLog.agent_name, func.count(AgentLog.id)).group_by(AgentLog.agent_name).all()
+    by_status = db.query(AgentLog.status, func.count(AgentLog.id)).group_by(AgentLog.status).all()
     total_campaigns = db.query(func.count(Campaign.id)).scalar()
-
     return {
         "total_logs": total,
         "total_campaigns": total_campaigns,
         "by_agent": {row[0]: row[1] for row in by_agent},
         "by_status": {row[0]: row[1] for row in by_status},
     }
+
+
+# ── Human-review endpoints ─────────────────────────────────────────────────────
+
+@router.get("/review")
+def get_pending_reviews(db: Session = Depends(get_db)):
+    """Return all review requests that are still pending."""
+    reviews = (
+        db.query(ReviewRequest)
+        .filter(ReviewRequest.status == "pending")
+        .order_by(desc(ReviewRequest.created_at))
+        .all()
+    )
+    return [
+        {
+            "id": r.id,
+            "campaign_id": r.campaign_id,
+            "agent": r.agent_name,
+            "task": r.task,
+            "output": r.output,
+            "status": r.status,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        }
+        for r in reviews
+    ]
+
+
+@router.post("/review/{review_id}/approve")
+def approve_review(review_id: int, db: Session = Depends(get_db)):
+    review = db.query(ReviewRequest).filter(ReviewRequest.id == review_id).first()
+    if not review:
+        raise HTTPException(status_code=404, detail="Review request not found")
+    submit_decision(review_id, "approved")
+    manager.broadcast_sync({
+        "type": "review_decided",
+        "review_id": review_id,
+        "decision": "approved",
+    })
+    return {"review_id": review_id, "decision": "approved"}
+
+
+@router.post("/review/{review_id}/reject")
+def reject_review(review_id: int, db: Session = Depends(get_db)):
+    review = db.query(ReviewRequest).filter(ReviewRequest.id == review_id).first()
+    if not review:
+        raise HTTPException(status_code=404, detail="Review request not found")
+    submit_decision(review_id, "rejected")
+    manager.broadcast_sync({
+        "type": "review_decided",
+        "review_id": review_id,
+        "decision": "rejected",
+    })
+    return {"review_id": review_id, "decision": "rejected"}

@@ -42,6 +42,19 @@ class Campaign(Base):
     completed_at = Column(DateTime, nullable=True)
 
 
+class ReviewRequest(Base):
+    __tablename__ = "review_requests"
+
+    id = Column(Integer, primary_key=True, index=True)
+    campaign_id = Column(String(100), nullable=False)
+    agent_name = Column(String(100), nullable=False)
+    task = Column(String(255), nullable=False)
+    output = Column(Text, nullable=True)
+    status = Column(String(50), default="pending")  # pending | approved | rejected
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    decided_at = Column(DateTime, nullable=True)
+
+
 def init_db():
     Base.metadata.create_all(bind=engine)
 
